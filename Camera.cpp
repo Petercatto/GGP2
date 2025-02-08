@@ -1,103 +1,186 @@
 #include "Camera.h"
 #include "Input.h"
-#include <algorithm>
 
 using namespace DirectX;
 
-Camera::Camera(float _x, float _y, float _z, float mSpeed, float lSpeed, float fov, float aspectRatio) :
-	nearPlane(0.01f),
-	farPlane(1000.0f)
+
+Camera::Camera(
+	DirectX::XMFLOAT3 position,
+	float fieldOfView,
+	float aspectRatio,
+	float nearClip,
+	float farClip,
+	CameraProjectionType projType) :
+	fieldOfView(fieldOfView),
+	aspectRatio(aspectRatio),
+	nearClip(nearClip),
+	farClip(farClip),
+	projectionType(projType),
+	orthographicWidth(10.0f)
 {
-	transform.SetPosition(_x, _y, _z);
-	this->moveSpeed = mSpeed;
-	this->lookSpeed = lSpeed;
-	this->FOV = fov;
+	transform = std::make_shared<Transform>();
+	transform->SetPosition(position);
 
-	//initialize starting matrices
-	XMStoreFloat4x4(&viewMatrix, XMMatrixIdentity());
-	XMStoreFloat4x4(&projMatrix, XMMatrixIdentity());
-
-	//update the matrices
 	UpdateViewMatrix();
 	UpdateProjectionMatrix(aspectRatio);
 }
 
-//gets the view matrix
-DirectX::XMFLOAT4X4 Camera::GetView()
+// Nothing to really do
+Camera::~Camera()
+{ }
+
+
+// Camera's update, which simply updates the view matrix
+void Camera::Update(float dt)
 {
-	return viewMatrix;
+	// Update the view every frame - could be optimized
+	UpdateViewMatrix();
 }
 
-//gets the projection matrix
-DirectX::XMFLOAT4X4 Camera::GetProjection()
-{
-	return projMatrix;
-}
-
-Transform Camera::GetTransform()
-{
-	return transform;
-}
-
-float Camera::GetFOV()
-{
-	return FOV;
-}
-
-//updates the projection matrix and stores it
-void Camera::UpdateProjectionMatrix(float aspectRatio)
-{
-	XMStoreFloat4x4(&projMatrix, XMMatrixPerspectiveFovLH(FOV, aspectRatio, nearPlane, farPlane));
-}
-
-//updates the view matrix and stores it
+// Creates a new view matrix based on current position and orientation
 void Camera::UpdateViewMatrix()
 {
-	//position of the camera
-	XMFLOAT3 pos = transform.GetPosition();
-	//direction its looking
-	XMFLOAT3 fwd = transform.GetForward();
-	//make the view matrix with global up vector
-	XMMATRIX view = XMMatrixLookToLH(XMLoadFloat3(&pos), XMLoadFloat3(&fwd), XMVectorSet(0, 1, 0, 0));
-	//store view matrix
+	// Get the camera's forward vector and position
+	XMFLOAT3 forward = transform->GetForward();
+	XMFLOAT3 pos = transform->GetPosition();
+
+	// Make the view matrix and save
+	XMMATRIX view = XMMatrixLookToLH(
+		XMLoadFloat3(&pos),
+		XMLoadFloat3(&forward),
+		XMVectorSet(0, 1, 0, 0)); // World up axis
 	XMStoreFloat4x4(&viewMatrix, view);
 }
 
-void Camera::Update(float dt)
+// Updates the projection matrix
+void Camera::UpdateProjectionMatrix(float aspectRatio)
 {
-	//WASD relative controls
-	if (Input::KeyDown('W')) { transform.MoveRelative(0.0, 0.0, dt * moveSpeed); }
-	if (Input::KeyDown('S')) { transform.MoveRelative(0.0, 0.0, dt * -moveSpeed); }
-	if (Input::KeyDown('A')) { transform.MoveRelative(dt * -moveSpeed, 0.0, 0.0); }
-	if (Input::KeyDown('D')) { transform.MoveRelative(dt * moveSpeed, 0.0, 0.0); }
+	this->aspectRatio = aspectRatio;
 
-	//up and down absolute controls
-	if (Input::KeyDown(' ')) { transform.MoveAbsolute(0.0, dt * moveSpeed, 0.0); }
-	if (Input::KeyDown(VK_LCONTROL)) { transform.MoveAbsolute(0.0, dt * -moveSpeed, 0.0); }
+	XMMATRIX P;
 
-	//mouse movement
-	if (Input::MouseLeftDown())
+	// Which type?
+	if (projectionType == CameraProjectionType::Perspective)
 	{
-		float cursorMovementX = static_cast<float>(Input::GetMouseXDelta());
-		float cursorMovementY = static_cast<float>(Input::GetMouseYDelta());
-
-		cursorMovementX *= lookSpeed;
-		cursorMovementY *= lookSpeed;
-
-		//apply the rotation
-		transform.Rotate(cursorMovementY, cursorMovementX, 0);
-
-		//clamp the x rotation so camera cant be flipped
-		if (transform.GetPitchYawRoll().x > XM_PI / 2.0f - 0.1f)
-		{
-			transform.SetRotation(XM_PI / 2.0f - 0.1f, transform.GetPitchYawRoll().y, transform.GetPitchYawRoll().z);
-		}
-		else if (transform.GetPitchYawRoll().x < -XM_PI / 2.0f + 0.1f)
-		{
-			transform.SetRotation(-XM_PI / 2.0f + 0.1f, transform.GetPitchYawRoll().y, transform.GetPitchYawRoll().z);
-		}
+		P = XMMatrixPerspectiveFovLH(
+			fieldOfView,		// Field of View Angle
+			aspectRatio,		// Aspect ratio
+			nearClip,			// Near clip plane distance
+			farClip);			// Far clip plane distance
+	}
+	else // CameraProjectionType::ORTHOGRAPHIC
+	{
+		P = XMMatrixOrthographicLH(
+			orthographicWidth,	// Projection width (in world units)
+			orthographicWidth / aspectRatio,// Projection height (in world units)
+			nearClip,			// Near clip plane distance 
+			farClip);			// Far clip plane distance
 	}
 
-	//update the view matrix
-	UpdateViewMatrix();
+	XMStoreFloat4x4(&projMatrix, P);
+}
+
+DirectX::XMFLOAT4X4 Camera::GetView() { return viewMatrix; }
+DirectX::XMFLOAT4X4 Camera::GetProjection() { return projMatrix; }
+std::shared_ptr<Transform> Camera::GetTransform() { return transform; }
+
+float Camera::GetAspectRatio() { return aspectRatio; }
+
+float Camera::GetFieldOfView() { return fieldOfView; }
+void Camera::SetFieldOfView(float fov)
+{
+	fieldOfView = fov;
+	UpdateProjectionMatrix(aspectRatio);
+}
+
+float Camera::GetNearClip() { return nearClip; }
+void Camera::SetNearClip(float distance)
+{
+	nearClip = distance;
+	UpdateProjectionMatrix(aspectRatio);
+}
+
+float Camera::GetFarClip() { return farClip; }
+void Camera::SetFarClip(float distance)
+{
+	farClip = distance;
+	UpdateProjectionMatrix(aspectRatio);
+}
+
+float Camera::GetOrthographicWidth() { return orthographicWidth; }
+void Camera::SetOrthographicWidth(float width)
+{
+	orthographicWidth = width;
+	UpdateProjectionMatrix(aspectRatio);
+}
+
+CameraProjectionType Camera::GetProjectionType() { return projectionType; }
+void Camera::SetProjectionType(CameraProjectionType type)
+{
+	projectionType = type;
+	UpdateProjectionMatrix(aspectRatio);
+}
+
+
+
+// ---------------------------------------------
+//  FPS CAMERA
+// ---------------------------------------------
+
+FPSCamera::FPSCamera(
+	DirectX::XMFLOAT3 position,
+	float moveSpeed,
+	float mouseLookSpeed,
+	float fieldOfView,
+	float aspectRatio,
+	float nearClip,
+	float farClip,
+	CameraProjectionType projType) :
+	Camera(position, fieldOfView, aspectRatio, nearClip, farClip, projType),
+	movementSpeed(moveSpeed),
+	mouseLookSpeed(mouseLookSpeed)
+{
+
+}
+
+float FPSCamera::GetMovementSpeed() { return movementSpeed; }
+void FPSCamera::SetMovementSpeed(float speed) { movementSpeed = speed; }
+
+float FPSCamera::GetMouseLookSpeed() { return mouseLookSpeed; }
+void FPSCamera::SetMouseLookSpeed(float speed) { mouseLookSpeed = speed; }
+
+void FPSCamera::Update(float dt)
+{
+	// Current speed
+	float speed = dt * movementSpeed;
+
+	// Speed up or down as necessary
+	if (Input::KeyDown(VK_SHIFT)) { speed *= 5; }
+	if (Input::KeyDown(VK_CONTROL)) { speed *= 0.1f; }
+
+	// Movement
+	if (Input::KeyDown('W')) { transform->MoveRelative(0, 0, speed); }
+	if (Input::KeyDown('S')) { transform->MoveRelative(0, 0, -speed); }
+	if (Input::KeyDown('A')) { transform->MoveRelative(-speed, 0, 0); }
+	if (Input::KeyDown('D')) { transform->MoveRelative(speed, 0, 0); }
+	if (Input::KeyDown('X')) { transform->MoveAbsolute(0, -speed, 0); }
+	if (Input::KeyDown(' ')) { transform->MoveAbsolute(0, speed, 0); }
+
+	// Handle mouse movement only when button is down
+	if (Input::MouseLeftDown())
+	{
+		// Calculate cursor change
+		float xDiff = mouseLookSpeed * Input::GetMouseXDelta();
+		float yDiff = mouseLookSpeed * Input::GetMouseYDelta();
+		transform->Rotate(yDiff, xDiff, 0);
+
+		// Clamp the X rotation
+		XMFLOAT3 rot = transform->GetPitchYawRoll();
+		if (rot.x > XM_PIDIV2) rot.x = XM_PIDIV2;
+		if (rot.x < -XM_PIDIV2) rot.x = -XM_PIDIV2;
+		transform->SetRotation(rot);
+	}
+
+	// Use base class's update (handles view matrix)
+	Camera::Update(dt);
 }

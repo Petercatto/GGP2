@@ -22,6 +22,9 @@ void Game::Initialize()
 {
 	CreateRootSigAndPipelineState();
 	CreateGeometry();
+
+	//create camera
+	camera = std::make_shared<FPSCamera>(XMFLOAT3(0.0f, 0.0f, -10.0f), 5.0f, 0.002f, XM_PIDIV4, Window::AspectRatio(), 0.01f, 100.0f, CameraProjectionType::Perspective);
 }
 
 
@@ -224,17 +227,15 @@ void Game::CreateGeometry()
 	entities.push_back(std::make_shared<GameEntity>(torus));
 	entities.push_back(std::make_shared<GameEntity>(sphere));
 
-	//entities[0]->GetTransform().SetPosition(-9.0f, 0.0f, 0.0f);
-	//entities[1]->GetTransform().SetPosition(-6.0f, 0.0f, 0.0f);
-	//entities[2]->GetTransform().SetPosition(-3.0f, 0.0f, 0.0f);
-	//entities[3]->GetTransform().SetPosition(0.0f, 0.0f, 0.0f);
-	//entities[3]->GetTransform().SetRotation(-XM_PI / 2, 0.0f, 0.0f);
-	//entities[4]->GetTransform().SetPosition(3.0f, 0.0f, 0.0f);
-	//entities[4]->GetTransform().SetRotation(-XM_PI / 2, 0.0f, 0.0f);
-	//entities[5]->GetTransform().SetPosition(6.0f, 0.0f, 0.0f);
-	//entities[6]->GetTransform().SetPosition(9.0f, 0.0f, 0.0f);
-
-	camera = std::make_shared<Camera>(0.0f, 0.0f, -10.0f, 7.5f, 0.02f, XM_PI / 3.0f, (float)Window::Width() / Window::Height());
+	entities[0]->GetTransform().SetPosition(-9.0f, 0.0f, 0.0f);
+	entities[1]->GetTransform().SetPosition(-6.0f, 0.0f, 0.0f);
+	entities[2]->GetTransform().SetPosition(-3.0f, 0.0f, 0.0f);
+	entities[3]->GetTransform().SetPosition(0.0f, 0.0f, 0.0f);
+	entities[3]->GetTransform().SetRotation(-XM_PI / 2, 0.0f, 0.0f);
+	entities[4]->GetTransform().SetPosition(3.0f, 0.0f, 0.0f);
+	entities[4]->GetTransform().SetRotation(-XM_PI / 2, 0.0f, 0.0f);
+	entities[5]->GetTransform().SetPosition(6.0f, 0.0f, 0.0f);
+	entities[6]->GetTransform().SetPosition(9.0f, 0.0f, 0.0f);
 }
 
 // --------------------------------------------------------
@@ -267,7 +268,10 @@ void Game::OnResize()
 		scissorRect.bottom = Window::Height();
 	}
 
-	//camera->UpdateProjectionMatrix(Window::Width() / Window::Height());
+	if (camera)
+	{
+		camera->UpdateProjectionMatrix(Window::AspectRatio());
+	}
 }
 
 // --------------------------------------------------------
@@ -287,21 +291,21 @@ void Game::Update(float deltaTime, float totalTime)
 	float scaleOffset = static_cast<float>(sin(totalTime * speed) * magnitude + 0.7f);
 
 	//entity movement
-	//auto& cube = entities[0]->GetTransform();
-	//cube.SetScale(scaleOffset, scaleOffset, scaleOffset);
-	//cube.Rotate(deltaTime, 0.0f, deltaTime);
-	//auto& cylinder = entities[1]->GetTransform();
-	//cylinder.Rotate(0.0f, deltaTime, 0.0f);
-	//auto& helix = entities[2]->GetTransform();
-	//helix.Rotate(0.0f, -deltaTime, 0.0f);
-	//auto& quad = entities[3]->GetTransform();
-	//quad.Rotate(-deltaTime, 0.0f, -deltaTime);
-	//auto& doubleSidedQuad = entities[4]->GetTransform();
-	//doubleSidedQuad.Rotate(0.0f, -deltaTime, 0.0f);
-	//auto& torus = entities[5]->GetTransform();
-	//torus.Rotate(0.0f, deltaTime, 0.0f);
-	//auto& sphere = entities[6]->GetTransform();
-	//sphere.Rotate(-deltaTime, -deltaTime, -deltaTime);
+	auto& cube = entities[0]->GetTransform();
+	cube.SetScale(scaleOffset, scaleOffset, scaleOffset);
+	cube.Rotate(deltaTime, 0.0f, deltaTime);
+	auto& cylinder = entities[1]->GetTransform();
+	cylinder.Rotate(0.0f, deltaTime, 0.0f);
+	auto& helix = entities[2]->GetTransform();
+	helix.Rotate(0.0f, -deltaTime, 0.0f);
+	auto& quad = entities[3]->GetTransform();
+	quad.Rotate(-deltaTime, 0.0f, -deltaTime);
+	auto& doubleSidedQuad = entities[4]->GetTransform();
+	doubleSidedQuad.Rotate(0.0f, -deltaTime, 0.0f);
+	auto& torus = entities[5]->GetTransform();
+	torus.Rotate(0.0f, deltaTime, 0.0f);
+	auto& sphere = entities[6]->GetTransform();
+	sphere.Rotate(-deltaTime, -deltaTime, -deltaTime);
 
 }
 

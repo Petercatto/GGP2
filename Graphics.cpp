@@ -18,12 +18,15 @@ namespace Graphics
 		bool vsyncDesired = false;
 		BOOL isFullscreen = false;
 
-		D3D_FEATURE_LEVEL featureLevel;
+		D3D_FEATURE_LEVEL featureLevel{};
+
 		unsigned int currentBackBufferIndex = 0;
-		//heap management on the gpu
+
+		// Descriptor heap management
 		SIZE_T cbvSrvDescriptorHeapIncrementSize = 0;
 		unsigned int cbvDescriptorOffset = 0;
-		// CB upload heap management (CPU side)
+
+		// CB upload heap management
 		UINT64 cbUploadHeapSizeInBytes = 0;
 		UINT64 cbUploadHeapOffsetInBytes = 0;
 		void* cbUploadHeapStartAddress = 0;
@@ -37,8 +40,6 @@ std::wstring Graphics::APIName()
 {
 	switch (featureLevel)
 	{
-	case D3D_FEATURE_LEVEL_10_0: return L"D3D10";
-	case D3D_FEATURE_LEVEL_10_1: return L"D3D10.1";
 	case D3D_FEATURE_LEVEL_11_0: return L"D3D11";
 	case D3D_FEATURE_LEVEL_11_1: return L"D3D11.1";
 	case D3D_FEATURE_LEVEL_12_0: return L"D3D12";
@@ -48,6 +49,15 @@ std::wstring Graphics::APIName()
 	}
 }
 
+
+// --------------------------------------------------------
+// Initializes the Graphics API, which requires window details.
+// 
+// windowWidth     - Width of the window (and our viewport)
+// windowHeight    - Height of the window (and our viewport)
+// windowHandle    - OS-level handle of the window
+// vsyncIfPossible - Sync to the monitor's refresh rate if available?
+// --------------------------------------------------------
 HRESULT Graphics::Initialize(unsigned int windowWidth, unsigned int windowHeight, HWND windowHandle, bool vsyncIfPossible)
 {
 	// Only initialize once
@@ -273,7 +283,7 @@ HRESULT Graphics::Initialize(unsigned int windowWidth, unsigned int windowHeight
 		D3D12_DESCRIPTOR_HEAP_DESC dhDesc = {};
 		dhDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE; // Shaders can see these!
 		dhDesc.NodeMask = 0; // Node here means physical GPU - we only have 1 so its index is 0
-		dhDesc.NumDescriptors = maxConstantBuffers; // How many descriptors will we need?
+		dhDesc.NumDescriptors = MaxConstantBuffers; // How many descriptors will we need?
 		dhDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; // This heap can store CBVs, SRVs and UAVs
 
 		Device->CreateDescriptorHeap(&dhDesc, IID_PPV_ARGS(CBVSRVDescriptorHeap.GetAddressOf()));
@@ -283,11 +293,12 @@ HRESULT Graphics::Initialize(unsigned int windowWidth, unsigned int windowHeight
 		cbvDescriptorOffset = 0;
 	}
 
+	// Create an upload heap for constant buffer data
 	{
 		// This heap MUST have a size that is a multiple of 256
 		// We'll support up to the max number of CBs if they're
 		// all 256 bytes or less, or fewer overall CBs if they're larger
-		cbUploadHeapSizeInBytes = (UINT64)maxConstantBuffers * 256;
+		cbUploadHeapSizeInBytes = (UINT64)MaxConstantBuffers * 256;
 
 		// Assume the first CB will start at the beginning of the heap
 		// This offset changes as we use more CBs, and wraps around when full
@@ -329,11 +340,23 @@ HRESULT Graphics::Initialize(unsigned int windowWidth, unsigned int windowHeight
 		CBUploadHeap->Map(0, &range, &cbUploadHeapStartAddress);
 	}
 
-
 	// Wait for the GPU before we proceed
-	WaitForGPU(); //i believe this is unoptimized, but it's fine for now
+	WaitForGPU();
 	apiInitialized = true;
 	return S_OK;
+}
+
+
+// --------------------------------------------------------
+// Called at the end of the program to clean up any
+// graphics API specific memory. 
+// 
+// This exists for completeness since D3D objects generally
+// use ComPtrs, which get cleaned up automatically.  Other
+// APIs might need more explicit clean up.
+// --------------------------------------------------------
+void Graphics::ShutDown()
+{
 }
 
 
@@ -452,6 +475,19 @@ void Graphics::ResizeBuffers(unsigned int width, unsigned int height)
 	WaitForGPU();
 }
 
+
+// --------------------------------------------------------
+// Advances the swap chain back buffer index by 1, wrapping
+// back to zero when necessary.  This should occur after
+// presenting the current frame.
+// --------------------------------------------------------
+void Graphics::AdvanceSwapChainIndex()
+{
+	currentBackBufferIndex++;
+	currentBackBufferIndex %= NumBackBuffers;
+}
+
+
 // --------------------------------------------------------
 // Helper for creating a static buffer that will get
 // data once and remain immutable
@@ -511,7 +547,7 @@ Microsoft::WRL::ComPtr<ID3D12Resource> Graphics::CreateStaticBuffer(size_t dataS
 		&props,
 		D3D12_HEAP_FLAG_NONE,
 		&desc,
-		D3D12_RESOURCE_STATE_COMMON, //causes warning as COPY_DEST STATE, set as common state
+		D3D12_RESOURCE_STATE_COPY_DEST,
 		0,
 		IID_PPV_ARGS(buffer.GetAddressOf()));
 
@@ -561,117 +597,6 @@ Microsoft::WRL::ComPtr<ID3D12Resource> Graphics::CreateStaticBuffer(size_t dataS
 	return buffer;
 }
 
-// --------------------------------------------------------
-// Advances the swap chain back buffer index by 1, wrapping
-// back to zero when necessary.  This should occur after
-// presenting the current frame.
-// --------------------------------------------------------
-void Graphics::AdvanceSwapChainIndex()
-{
-	currentBackBufferIndex++;
-	currentBackBufferIndex %= NumBackBuffers;
-}
-
-// --------------------------------------------------------
-// Resets the command allocator and list
-//
-// Always wait before reseting command allocator, as it should not
-// be reset while the GPU is processing a command list
-// --------------------------------------------------------
-void Graphics::ResetAllocatorAndCommandList()
-{
-	CommandAllocator->Reset();
-	CommandList->Reset(CommandAllocator.Get(), 0);
-}
-
-// --------------------------------------------------------
-// Closes the current command list and tells the GPU to
-// start executing those commands. We also wait for
-// the GPU to finish this work so we can reset the
-// command allocator (which CANNOT be reset while the
-// GPU is using its commands) and the command list itself.
-// --------------------------------------------------------
-void Graphics::CloseAndExecuteCommandList()
-{
-	// Close the current list and execute it as our only list
-	CommandList->Close();
-	ID3D12CommandList* lists[] = { CommandList.Get() };
-	CommandQueue->ExecuteCommandLists(1, lists);
-}
-
-// --------------------------------------------------------
-// Makes our C++ code wait for the GPU to finish its
-// current batch of work before moving on.
-// --------------------------------------------------------
-void Graphics::WaitForGPU()
-{
-	// Update our ongoing fence value (a unique index for each "stop sign")
-	// and then place that value into the GPU's command queue
-	WaitFenceCounter++;
-	CommandQueue->Signal(WaitFence.Get(), WaitFenceCounter);
-	// Check to see if the most recently completed fence value
-	// is less than the one we just set.
-	if (WaitFence->GetCompletedValue() < WaitFenceCounter)
-	{
-		// Tell the fence to let us know when it's hit, and then
-		// sit and wait until that fence is hit.
-		WaitFence->SetEventOnCompletion(WaitFenceCounter, WaitFenceEvent);
-		WaitForSingleObject(WaitFenceEvent, INFINITE);
-	}
-}
-
-
-void Graphics::PrintDebugMessages()
-{
-	// Do we actually have an info queue (usually in debug mode)
-	if (!InfoQueue)
-		return;
-
-	// Any messages?
-	UINT64 messageCount = InfoQueue->GetNumStoredMessages();
-	if (messageCount == 0)
-		return;
-
-	// Loop and print messages
-	for (UINT64 i = 0; i < messageCount; i++)
-	{
-		// Get the size so we can reserve space
-		size_t messageSize = 0;
-		InfoQueue->GetMessage(i, 0, &messageSize);
-
-		// Reserve space for this message
-		D3D12_MESSAGE* message = (D3D12_MESSAGE*)malloc(messageSize);
-		InfoQueue->GetMessage(i, message, &messageSize);
-
-		// Print and clean up memory
-		if (message)
-		{
-			// Color code based on severity
-			switch (message->Severity)
-			{
-			case D3D12_MESSAGE_SEVERITY_CORRUPTION:
-			case D3D12_MESSAGE_SEVERITY_ERROR:
-				printf("\x1B[91m"); break; // RED
-
-			case D3D12_MESSAGE_SEVERITY_WARNING:
-				printf("\x1B[93m"); break; // YELLOW
-
-			case D3D12_MESSAGE_SEVERITY_INFO:
-			case D3D12_MESSAGE_SEVERITY_MESSAGE:
-				printf("\x1B[96m"); break; // CYAN
-			}
-
-			printf("%s\n\n", message->pDescription);
-			free(message);
-
-			// Reset color
-			printf("\x1B[0m");
-		}
-	}
-
-	// Clear any messages we've printed
-	InfoQueue->ClearStoredMessages();
-}
 
 // --------------------------------------------------------
 // Copies the given data into the next "unused" spot in
@@ -740,7 +665,7 @@ D3D12_GPU_DESCRIPTOR_HANDLE Graphics::FillNextConstantBufferAndGetGPUDescriptorH
 		// Increment the offset and loop back to the beginning if necessary
 		// which allows us to treat the descriptor heap as a ring buffer
 		cbvDescriptorOffset++;
-		if (cbvDescriptorOffset >= maxConstantBuffers)
+		if (cbvDescriptorOffset >= MaxConstantBuffers)
 			cbvDescriptorOffset = 0;
 
 		// Now that the CBV is ready, we return the GPU handle to it
@@ -749,6 +674,110 @@ D3D12_GPU_DESCRIPTOR_HANDLE Graphics::FillNextConstantBufferAndGetGPUDescriptorH
 	}
 }
 
-void Graphics::ShutDown()
+
+// --------------------------------------------------------
+// Resets the command allocator and list
+// 
+// Always wait before reseting command allocator, as it should not
+// be reset while the GPU is processing a command list
+// --------------------------------------------------------
+void Graphics::ResetAllocatorAndCommandList()
 {
+	CommandAllocator->Reset();
+	CommandList->Reset(CommandAllocator.Get(), 0);
+}
+
+
+// --------------------------------------------------------
+// Closes the current command list and tells the GPU to
+// start executing those commands.  We also wait for
+// the GPU to finish this work so we can reset the
+// command allocator (which CANNOT be reset while the
+// GPU is using its commands) and the command list itself.
+// --------------------------------------------------------
+void Graphics::CloseAndExecuteCommandList()
+{
+	// Close the current list and execute it as our only list
+	CommandList->Close();
+	ID3D12CommandList* lists[] = { CommandList.Get() };
+	CommandQueue->ExecuteCommandLists(1, lists);
+}
+
+
+// --------------------------------------------------------
+// Makes our C++ code wait for the GPU to finish its
+// current batch of work before moving on.
+// --------------------------------------------------------
+void Graphics::WaitForGPU()
+{
+	// Update our ongoing fence value (a unique index for each "stop sign")
+	// and then place that value into the GPU's command queue
+	WaitFenceCounter++;
+	CommandQueue->Signal(WaitFence.Get(), WaitFenceCounter);
+
+	// Check to see if the most recently completed fence value
+	// is less than the one we just set.
+	if (WaitFence->GetCompletedValue() < WaitFenceCounter)
+	{
+		// Tell the fence to let us know when it's hit, and then
+		// sit and wait until that fence is hit.
+		WaitFence->SetEventOnCompletion(WaitFenceCounter, WaitFenceEvent);
+		WaitForSingleObject(WaitFenceEvent, INFINITE);
+	}
+}
+
+
+// --------------------------------------------------------
+// Prints graphics debug messages waiting in the queue
+// --------------------------------------------------------
+void Graphics::PrintDebugMessages()
+{
+	// Do we actually have an info queue (usually in debug mode)
+	if (!InfoQueue)
+		return;
+
+	// Any messages?
+	UINT64 messageCount = InfoQueue->GetNumStoredMessages();
+	if (messageCount == 0)
+		return;
+
+	// Loop and print messages
+	for (UINT64 i = 0; i < messageCount; i++)
+	{
+		// Get the size so we can reserve space
+		size_t messageSize = 0;
+		InfoQueue->GetMessage(i, 0, &messageSize);
+
+		// Reserve space for this message
+		D3D12_MESSAGE* message = (D3D12_MESSAGE*)malloc(messageSize);
+		InfoQueue->GetMessage(i, message, &messageSize);
+
+		// Print and clean up memory
+		if (message)
+		{
+			// Color code based on severity
+			switch (message->Severity)
+			{
+			case D3D12_MESSAGE_SEVERITY_CORRUPTION:
+			case D3D12_MESSAGE_SEVERITY_ERROR:
+				printf("\x1B[91m"); break; // RED
+
+			case D3D12_MESSAGE_SEVERITY_WARNING:
+				printf("\x1B[93m"); break; // YELLOW
+
+			case D3D12_MESSAGE_SEVERITY_INFO:
+			case D3D12_MESSAGE_SEVERITY_MESSAGE:
+				printf("\x1B[96m"); break; // CYAN
+			}
+
+			printf("%s\n\n", message->pDescription);
+			free(message);
+
+			// Reset color
+			printf("\x1B[0m");
+		}
+	}
+
+	// Clear any messages we've printed
+	InfoQueue->ClearStoredMessages();
 }
